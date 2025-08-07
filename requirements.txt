@@ -1,0 +1,6 @@
+datasets
+huggingface_hub
+transformers
+torchvision
+opencv-python
+av
