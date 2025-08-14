@@ -6,6 +6,8 @@ import av
 from torchvision.transforms.functional import resize
 from transformers import XCLIPProcessor, XCLIPModel
 from datasets import load_dataset
+from datasets import load_from_disk
+
 
 #data
 ds_train_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['train']
@@ -22,10 +24,14 @@ ds_test_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['test']
 # -----------------------
 MODEL_NAME = "microsoft/xclip-base-patch32"
 processor = XCLIPProcessor.from_pretrained(MODEL_NAME)
-model = XCLIPModel.from_pretrained(MODEL_NAME)
+if torch.cuda.is_available():
+    model = XCLIPModel.from_pretrained(MODEL_NAME, torch_dtype=torch.float16).to("cuda")
+else:
+    model = XCLIPModel.from_pretrained(MODEL_NAME)
+    model.to("cpu")
 model.eval()
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(device)
+
+
 
 # -----------------------
 # Text helpers
@@ -178,29 +184,34 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
                     padding=True
                 )
                 # Move to device
-                for k in inputs:
-                    if isinstance(inputs[k], torch.Tensor):
-                        inputs[k] = inputs[k].to(device)
+                for k, v in inputs.items():
+                    if isinstance(v, torch.Tensor):
+                        inputs[k] = v.to(device, non_blocking=True)
 
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                    # (B, D)
-                    vemb = outputs.video_embeds
-                    temb = outputs.text_embeds
+                if device == "cuda":
+                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+                        outputs = model(**inputs)
+                else:
+                    with torch.inference_mode():
+                        outputs = model(**inputs)
+                
+                # (B, D) - Extract embeddings outside the device-specific blocks
+                vemb = outputs.video_embeds
+                temb = outputs.text_embeds
 
-                    # L2-normalize
-                    vemb = torch.nn.functional.normalize(vemb, p=2, dim=1)
-                    temb = torch.nn.functional.normalize(temb, p=2, dim=1)
+                # L2-normalize
+                vemb = torch.nn.functional.normalize(vemb, p=2, dim=1)
+                temb = torch.nn.functional.normalize(temb, p=2, dim=1)
 
-                    # to float16 CPU lists
-                    vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
-                    temb = temb.detach().to("cpu").to(torch.float16).numpy()
+                # to float16 CPU lists
+                vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
+                temb = temb.detach().to("cpu").to(torch.float16).numpy()
 
                 # Scatter back
                 for j, i in enumerate(valid_idx):
-                    # Get individual embeddings and ensure they're 1D
-                    video_emb = vemb[j].reshape(-1)  # Flatten from (1, 512) to (512,)
-                    text_emb = temb[j].reshape(-1)   # Flatten from (1, 512) to (512,)
+                    # Get individual embeddings 
+                    video_emb = vemb[j].reshape(-1)  # Flatten to (512,)
+                    text_emb = temb[j].reshape(-1)   # Flatten to (512,)
                     
                     # Re-normalize after reshaping to ensure unit norm
                     video_emb = video_emb / np.linalg.norm(video_emb)
@@ -217,60 +228,33 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
                     text_emb_out[i]  = None
 
         return {
-            "paired_text": paired_texts,
+            "pid": pids,
+            "uid": uids,
             "text_emb_f16": text_emb_out,
             "video_emb_f16": video_emb_out,
-            "proc_status": status,
         }
 
     # batched=True uses our _mapper on chunks of rows;
     # batch_size here controls how many rows per map-call (unrelated to XCLIP frame count).
     video_text_features = posts_ds.map(_mapper, batched=True, batch_size=batch_size)
+    # Optionally filter to only keep specific columns
+    video_text_features = video_text_features.select_columns(["pid", "uid", "text_emb_f16", "video_emb_f16"])
     return video_text_features
 
 
+def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache", **kwargs):
+    """
+    Load cached dataset if it exists; else compute with build_video_text_embeddings(),
+    save to disk once, and return it.
+    """
+    if os.path.exists(cache_dir):
+        return load_from_disk(cache_dir)
+
+    ds = build_video_text_embeddings(posts_ds, **kwargs)
+    ds.save_to_disk(cache_dir)
+    return ds
 
 
-N = 1 # try first 10 posts to find one that processes OK
-test_slice = ds_train_posts.select(range(min(N, len(ds_train_posts))))
-emb_slice = build_video_text_embeddings(test_slice, batch_size=2, num_frames=8)
 
-print("Columns now:", emb_slice.column_names)
 
-# --- 2) Find the first successful row ---
-ok_idxs = [i for i, s in enumerate(emb_slice["proc_status"]) if s == "ok"]
-if not ok_idxs:
-    raise RuntimeError("No successful rows in the test slice. Try increasing N or check video paths.")
-i = ok_idxs[0]
-row = emb_slice[i]
 
-print("\nSample OK row index:", i)
-print("pid:", row["pid"], "uid:", row["uid"])
-print("proc_status:", row["proc_status"])
-print("paired_text (first 140 chars):", (row["paired_text"] or "")[:140])
-
-# --- 3) Basic validity checks on embeddings ---
-v = np.array(row["video_emb_f16"], dtype=np.float16)
-t = np.array(row["text_emb_f16"], dtype=np.float16)
-
-# Debug: print shapes and types
-print(f"Video embedding shape: {v.shape}, type: {type(v)}, dtype: {v.dtype}")
-print(f"Text embedding shape: {t.shape}, type: {type(t)}, dtype: {t.dtype}")
-print(f"Video embedding content: {row['video_emb_f16'][:5] if row['video_emb_f16'] else 'None'}")  # First 5 elements
-print(f"Text embedding content: {row['text_emb_f16'][:5] if row['text_emb_f16'] else 'None'}")   # First 5 elements
-
-assert v.ndim == 1 and t.ndim == 1, "Embeddings should be 1D vectors"
-assert len(v) == len(t) and len(v) > 0, "Video/Text dims must match and be > 0"
-assert v.dtype == np.float16 and t.dtype == np.float16, "Embeddings should be float16"
-
-# Check (approx) unit norm after L2-normalize in pipeline
-v_norm = np.linalg.norm(v.astype(np.float32))
-t_norm = np.linalg.norm(t.astype(np.float32))
-print("video norm:", round(float(v_norm), 4), "| text norm:", round(float(t_norm), 4))
-assert 0.9 < v_norm < 1.1 and 0.9 < t_norm < 1.1, "Expected near unit-norm embeddings"
-
-# --- 4) Cosine similarity sanity check (should be finite and reasonable) ---
-cos_sim = float(np.dot(v.astype(np.float32), t.astype(np.float32)))
-print("cosine(video, text):", round(cos_sim, 4))
-
-print("\n✅ Single-item embedding test passed.")
