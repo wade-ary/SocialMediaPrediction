@@ -91,6 +91,23 @@ def build_user_features(users_ds):
 
     # Map returns a NEW dataset; original users_ds remains unchanged
     users_features = users_ds.map(_add_features, batched=True, batch_size=1000)
+    
+    # Select only uid and log1p features
+    users_features = users_features.select_columns([
+        "uid",
+        "log1p_user_following_count",
+        "log1p_user_follower_count", 
+        "log1p_user_likes_count",
+        "log1p_user_video_count",
+        "log1p_user_digg_count",
+        "log1p_user_heart_count",
+        "log1p_follower_following_ratio",
+        "log1p_likes_per_video",
+        "log1p_hearts_per_video", 
+        "log1p_diggs_per_video",
+        "log1p_likes_per_follower"
+    ])
+    
     return users_features
 
 ds_train_users_features = build_user_features(ds_train_users)
@@ -134,7 +151,17 @@ def build_video_features(videos_ds, batch_size=1000, vertical_threshold=1.0):
             "is_vertical":  is_vertical.tolist(),
         }
 
-    return videos_ds.map(_add_features, batched=True, batch_size=batch_size)
+    video_features = videos_ds.map(_add_features, batched=True, batch_size=batch_size)
+    
+    # Select only pid, uid and video features
+    video_features = video_features.select_columns([
+        "pid",
+        "uid", 
+        "aspect_ratio",
+        "is_vertical"
+    ])
+    
+    return video_features
 
 
 
@@ -173,7 +200,7 @@ def _build_one_hot_vocab(values, top_k=None, min_count=1):
     cats = sorted(cats, key=lambda x: (_slug(x)))
     return cats, counts
 
-def build_post_features(posts_ds, *, batch_size=1000, top_k_lang=None, top_k_loc=None, min_count=1):
+def build_post_features(posts_ds, *, batch_size=1000, top_k_lang=3, top_k_loc=3, min_count=1):
     """
     Returns a NEW HF Dataset with:
       - time features: hour, minute, minute_of_day, sin_time, cos_time
@@ -276,6 +303,17 @@ def build_post_features(posts_ds, *, batch_size=1000, top_k_lang=None, top_k_loc
         return out
 
     posts_features = posts_ds.map(_add_features, batched=True, batch_size=batch_size)
+    
+    # Remove unwanted columns, keep pid, uid and engineered features
+    posts_features = posts_features.remove_columns([
+        "post_content",
+        "post_location", 
+        "post_suggested_words",
+        "post_text_language",
+        "video_path",
+        "post_time"
+    ])
+    
     return posts_features
 
 
