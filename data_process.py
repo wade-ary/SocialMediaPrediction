@@ -200,7 +200,114 @@ def _build_one_hot_vocab(values, top_k=None, min_count=1):
     cats = sorted(cats, key=lambda x: (_slug(x)))
     return cats, counts
 
-def build_post_features(posts_ds, *, batch_size=1000, top_k_lang=3, top_k_loc=3, min_count=1):
+def build_post_features(posts_ds, *, batch_size=1000, min_count=1):
+    """
+    Returns a NEW HF Dataset with:
+      - time features: hour, minute, minute_of_day, sin_time, cos_time
+      - one-hot for post_text_language and post_location
+        using fixed vocab lists and 'other' bucket
+    Identifiers (pid, uid) are kept but not transformed.
+    Columns ignored for now: post_content, post_suggested_words, video_path.
+    """
+
+    required = ["post_time", "post_text_language", "post_location"]
+    missing = [c for c in required if c not in posts_ds.column_names]
+    if missing:
+        raise ValueError(f"Missing required columns in posts_ds: {missing}")
+
+    # ----- Fixed vocab lists -----
+    lang_vocab = ['en', 'un', 'es', 'id', 'pt']  # given categories
+    loc_vocab  = ['US', 'GB', 'CA', 'PH', 'AU']  # given categories
+
+    lang_set = set(lang_vocab)
+    loc_set  = set(loc_vocab)
+
+    # Column names for one-hot
+    lang_cols = [f"lang__{_slug(c)}" for c in lang_vocab]
+    loc_cols  = [f"loc__{_slug(c)}"  for c in loc_vocab]
+    lang_other_col = "lang__other"
+    loc_other_col  = "loc__other"
+
+    # ----- Mapper -----
+    def _add_features(batch):
+        times = batch["post_time"]
+        langs = batch["post_text_language"]
+        locs  = batch["post_location"]
+
+        n = len(times)
+
+        # Time features
+        hour = np.zeros(n, dtype=np.int16)
+        minute = np.zeros(n, dtype=np.int16)
+        minute_of_day = np.zeros(n, dtype=np.int32)
+
+        for i, ts in enumerate(times):
+            if ts is None:
+                h, m = 0, 0
+            else:
+                if hasattr(ts, "hour") and hasattr(ts, "minute"):
+                    h, m = ts.hour, ts.minute
+                else:
+                    dt = np.datetime64(ts, 's').astype(object)
+                    h, m = dt.hour, dt.minute
+            hour[i] = h
+            minute[i] = m
+            minute_of_day[i] = h * 60 + m
+
+        # Cyclical encoding (period = 1440 minutes)
+        angle = (2.0 * math.pi * minute_of_day.astype(np.float64)) / 1440.0
+        sin_time = np.sin(angle)
+        cos_time = np.cos(angle)
+
+        # One-hot encoding init
+        out = {
+            "hour": hour.tolist(),
+            "minute": minute.tolist(),
+            "minute_of_day": minute_of_day.tolist(),
+            "sin_time": sin_time.tolist(),
+            "cos_time": cos_time.tolist(),
+        }
+
+        # Prepare zero arrays for one-hots
+        for col in lang_cols:
+            out[col] = [0] * n
+        out[lang_other_col] = [0] * n
+
+        for col in loc_cols:
+            out[col] = [0] * n
+        out[loc_other_col] = [0] * n
+
+        # Fill one-hots
+        for i in range(n):
+            lang = langs[i] if langs[i] is not None else "unknown"
+            loc  = locs[i]  if locs[i]  is not None else "unknown"
+
+            if lang in lang_set:
+                out[f"lang__{_slug(lang)}"][i] = 1
+            else:
+                out[lang_other_col][i] = 1
+
+            if loc in loc_set:
+                out[f"loc__{_slug(loc)}"][i] = 1
+            else:
+                out[loc_other_col][i] = 1
+
+        return out
+
+    posts_features = posts_ds.map(_add_features, batched=True, batch_size=batch_size)
+
+    # Remove unwanted columns
+    posts_features = posts_features.remove_columns([
+        "post_content",
+        "post_location", 
+        "post_suggested_words",
+        "post_text_language",
+        "video_path",
+        "post_time"
+    ])
+    
+    return posts_features
+
     """
     Returns a NEW HF Dataset with:
       - time features: hour, minute, minute_of_day, sin_time, cos_time
@@ -326,3 +433,70 @@ print(ds_train_post_features[0])  # first row
 
 print("\nNew columns added:")
 print([col for col in ds_train_post_features.column_names])
+
+
+
+def build_target_features(labels_ds, clip_percentile=99.5):
+    """
+    Clip and log the target scores from labels dataset.
+    - Find the 99.5th percentile of raw scores
+    - Cap each score at that value
+    - Apply log1p transformation: y = log1p(clipped_score)
+    - Return the cap value for reuse on val/test
+    
+    Args:
+        labels_ds: HuggingFace dataset with target scores
+        clip_percentile: Percentile to use for clipping (default 99.5)
+    
+    Returns:
+        tuple: (processed_labels_ds, cap_value)
+    """
+    # Extract raw scores
+    raw_scores = labels_ds["popularity"]
+    
+    # Calculate the 99.5th percentile (cap value)
+    cap_value = np.percentile(raw_scores, clip_percentile)
+    print(f"99.5th percentile (cap value): {cap_value:.4f}")
+    
+    def _process_targets(batch):
+        scores = np.array(batch["popularity"], dtype=np.float64)
+        
+        # Clip scores at the cap value
+        clipped_scores = np.minimum(scores, cap_value)
+        
+        # Apply log1p transformation
+        log1p_scores = np.log1p(clipped_scores)
+        
+        return {
+            "score_clipped": clipped_scores.tolist(),
+            "popularity_log1p": log1p_scores.tolist(),
+            "cap_value": [cap_value] * len(scores)  # Store cap value for reference
+        }
+    
+    # Process the labels
+    processed_labels = labels_ds.map(_process_targets, batched=True, batch_size=1000)
+    
+    # Keep only essential columns: pid, uid, and log1p target
+    processed_labels = processed_labels.select_columns([
+        "pid", 
+        "uid", 
+        "popularity_log1p"
+    ])
+    
+    return processed_labels, cap_value
+
+# Process training labels
+ds_train_labels_processed, train_cap_value = build_target_features(ds_train_labels)
+
+print(f"\nTraining labels processed shape: {ds_train_labels_processed.shape}")
+print(f"Cap value for reuse: {train_cap_value:.4f}")
+print(f"Sample processed labels:")
+print(ds_train_labels_processed[0])
+
+
+
+
+
+
+
+

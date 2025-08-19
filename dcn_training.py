@@ -21,7 +21,7 @@ ds_train_labels = load_dataset("smpchallenge/SMP-Video", 'labels')['train']
 post_features = load_post_features(ds_train_posts)
 video_features = load_video_features(ds_train_videos)
 user_features = load_user_features(ds_train_users)
-
+video_text_features = build_video_text_embeddings(ds_train_posts)
 
 
 # -----------------------

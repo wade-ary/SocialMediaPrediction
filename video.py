@@ -196,16 +196,16 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
                         outputs = model(**inputs)
                 
                 # (B, D) - Extract embeddings outside the device-specific blocks
-                vemb = outputs.video_embeds
-                temb = outputs.text_embeds
+                    vemb = outputs.video_embeds
+                    temb = outputs.text_embeds
 
-                # L2-normalize
-                vemb = torch.nn.functional.normalize(vemb, p=2, dim=1)
-                temb = torch.nn.functional.normalize(temb, p=2, dim=1)
+                    # L2-normalize
+                    vemb = torch.nn.functional.normalize(vemb, p=2, dim=1)
+                    temb = torch.nn.functional.normalize(temb, p=2, dim=1)
 
-                # to float16 CPU lists
-                vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
-                temb = temb.detach().to("cpu").to(torch.float16).numpy()
+                    # to float16 CPU lists
+                    vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
+                    temb = temb.detach().to("cpu").to(torch.float16).numpy()
 
                 # Scatter back
                 for j, i in enumerate(valid_idx):
