@@ -493,10 +493,29 @@ def materialize_tensors(master_table, batch_size=1000):
     if "text_emb_f16" in master_table.column_names and "video_emb_f16" in master_table.column_names:
         print("✅ Found text and video embeddings in master table")
         
-        # Extract embeddings and convert to numpy arrays
+        # Check for excessive zero embeddings (indicates serious issue)
+        zero_text_count = 0
+        zero_video_count = 0
+        total_embeddings = len(master_table)
+        
+        for i in range(len(master_table)):
+            text_emb = master_table["text_emb_f16"][i]
+            video_emb = master_table["video_emb_f16"][i]
+            
+            # Check if embeddings are all zeros
+            if text_emb and all(x == 0.0 for x in text_emb):
+                zero_text_count += 1
+            if video_emb and all(x == 0.0 for x in video_emb):
+                zero_video_count += 1
+        
+        # Print zero embedding statistics
+        print(f"Zero embeddings check: text={zero_text_count}/{total_embeddings} ({zero_text_count/total_embeddings*100:.1f}%), video={zero_video_count}/{total_embeddings} ({zero_video_count/total_embeddings*100:.1f}%)")
+        
+        # Initialize lists for processing
         text_embeddings = []
         video_embeddings = []
         
+        # Continue with normal processing...
         for i in range(len(master_table)):
             text_emb = master_table["text_emb_f16"][i]
             video_emb = master_table["video_emb_f16"][i]
