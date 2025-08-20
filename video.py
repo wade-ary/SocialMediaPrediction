@@ -273,5 +273,10 @@ def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache_train", *
 
 
 
+embeddings_ds = compute_or_load_embeddings(3200, cache_dir="./video_text_cache_train")
+if len(embeddings_ds) < 3200:
+    print(f"Cache incomplete ({len(embeddings_ds)} vs {3200}), recomputing...")
+    embeddings_ds = build_video_text_embeddings(train_posts_for_emb, batch_size=8)
 
+print(len(embeddings_ds))
 
