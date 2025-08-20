@@ -69,3 +69,5 @@ lang_vocab, loc_vocab = build_global_vocabularies(ds_train_posts)
 
 print(f"\n✅ Global vocabularies created successfully!")
 print(f"Use these vocabularies consistently across all splits to maintain feature dimensions.")
+
+

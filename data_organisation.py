@@ -1,9 +1,17 @@
+from data_process import build_post_features, build_target_features, build_user_features, build_video_features
 from data_process import *
 from datasets import load_dataset
 from collections import Counter
 import re
 import math
 import numpy as np
+
+ds_train_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['train']
+ds_train_users = load_dataset("smpchallenge/SMP-Video", 'users')['train']
+ds_train_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['train']
+ds_train_labels = load_dataset("smpchallenge/SMP-Video", 'labels')['train']
+
+
 
 def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1, random_seed=42):
     """
@@ -122,11 +130,16 @@ print(f"\n{'='*60}")
 print("CREATING TRAIN/VAL/TEST SPLITS")
 print(f"{'='*60}")
 
+processed_targets, train_cap_value = build_target_features(ds_train_labels)
+processed_posts = build_post_features(ds_train_posts)
+processed_users = build_user_features(ds_train_users)
+processed_videos = build_video_features(ds_train_videos)
+
 train_data, val_data, test_data = create_train_val_test_split(
-    ds_train_labels_processed,
-    ds_train_post_features, 
-    ds_train_users_features,
-    ds_train_video_features
+    processed_targets,
+   processed_posts, 
+    processed_users,
+   processed_videos
 )
 
 print(f"\n✅ Train/Val/Test splits created successfully!")
@@ -160,68 +173,54 @@ def build_master_train_table(train_data, batch_size=1000):
     print(f"Train posts: {len(train_posts)} samples")
     print(f"Train users: {len(train_users)} samples")
     print(f"Train videos: {len(train_videos)} samples")
+
+    post_idx  = {pid: i for i, pid in enumerate(train_posts["pid"])}
+    user_idx  = {uid: i for i, uid in enumerate(train_users["uid"])}
+    video_idx = {pid: i for i, pid in enumerate(train_videos["pid"])}
+    emb_idx = {pid: i for i, pid in enumerate(train_posts["pid"])}
     
     # First, let's join labels with posts (they both have pid, uid)
     print("\nJoining labels with posts...")
     
     def join_labels_posts(batch):
-        # Get the batch data
         pids = batch["pid"]
         uids = batch["uid"]
         popularity = batch["popularity_log1p"]
-        
-        # Find corresponding post features
-        post_features = {}
-        for i, pid in enumerate(pids):
-            # Find post with matching pid
-            post_idx = None
-            for j, post_pid in enumerate(train_posts["pid"]):
-                if post_pid == pid:
-                    post_idx = j
-                    break
-            
-            if post_idx is not None:
-                post_features[i] = {
-                    "hour": train_posts["hour"][post_idx],
-                    "minute": train_posts["minute"][post_idx],
-                    "minute_of_day": train_posts["minute_of_day"][post_idx],
-                    "sin_time": train_posts["sin_time"][post_idx],
-                    "cos_time": train_posts["cos_time"][post_idx],
-                    "lang__en": train_posts["lang__en"][post_idx],
-                    "lang__un": train_posts["lang__un"][post_idx],
-                    "lang__es": train_posts["lang__es"][post_idx],
-                    "lang__id": train_posts["lang__id"][post_idx],
-                    "lang__pt": train_posts["lang__pt"][post_idx],
-                    "lang__other": train_posts["lang__other"][post_idx],
-                    "loc__us": train_posts["loc__us"][post_idx],
-                    "loc__gb": train_posts["loc__gb"][post_idx],
-                    "loc__ca": train_posts["loc__ca"][post_idx],
-                    "loc__ph": train_posts["loc__ph"][post_idx],
-                    "loc__au": train_posts["loc__au"][post_idx],
-                    "loc__other": train_posts["loc__other"][post_idx]
-                }
-            else:
-                # Default values if post not found
-                post_features[i] = {
-                    "hour": 0, "minute": 0, "minute_of_day": 0,
-                    "sin_time": 0.0, "cos_time": 1.0,
-                    "lang__en": 0, "lang__un": 0, "lang__es": 0, "lang__id": 0, "lang__pt": 0, "lang__other": 0,
-                    "loc__us": 0, "loc__gb": 0, "loc__ca": 0, "loc__ph": 0, "loc__au": 0, "loc__other": 0
-                }
-        
-        # Build output batch
+
         out = {
             "pid": pids,
             "uid": uids,
-            "popularity_log1p": popularity
+            "popularity_log1p": popularity,
         }
-        
-        # Add post features
-        for feature in ["hour", "minute", "minute_of_day", "sin_time", "cos_time",
-                       "lang__en", "lang__un", "lang__es", "lang__id", "lang__pt", "lang__other",
-                       "loc__us", "loc__gb", "loc__ca", "loc__ph", "loc__au", "loc__other"]:
-            out[feature] = [post_features[i][feature] for i in range(len(pids))]
-        
+
+        def get_post(field, default):
+            # O(1) dict lookup; no inner scans
+            return [
+                train_posts[field][post_idx[p]] if p in post_idx else default
+                for p in pids
+            ]
+
+        out.update({
+            "hour":          get_post("hour", 0.0),
+            "minute":        get_post("minute", 0.0),
+            "minute_of_day": get_post("minute_of_day", 0.0),
+            "sin_time":      get_post("sin_time", 0.0),
+            "cos_time":      get_post("cos_time", 1.0),
+
+            "lang__en":      get_post("lang__en", 0.0),
+            "lang__un":      get_post("lang__un", 0.0),
+            "lang__es":      get_post("lang__es", 0.0),
+            "lang__id":      get_post("lang__id", 0.0),
+            "lang__pt":      get_post("lang__pt", 0.0),
+            "lang__other":   get_post("lang__other", 0.0),
+
+            "loc__us":       get_post("loc__us", 0.0),
+            "loc__gb":       get_post("loc__gb", 0.0),
+            "loc__ca":       get_post("loc__ca", 0.0),
+            "loc__ph":       get_post("loc__ph", 0.0),
+            "loc__au":       get_post("loc__au", 0.0),
+            "loc__other":    get_post("loc__other", 0.0),
+        })
         return out
     
     # Join labels with posts
@@ -233,53 +232,28 @@ def build_master_train_table(train_data, batch_size=1000):
     print("\nJoining with user features...")
     
     def join_user_features(batch):
-        pids = batch["pid"]
         uids = batch["uid"]
-        
-        # Find corresponding user features
-        user_features = {}
-        for i, uid in enumerate(uids):
-            # Find user with matching uid
-            user_idx = None
-            for j, user_uid in enumerate(train_users["uid"]):
-                if user_uid == uid:
-                    user_idx = j
-                    break
-            
-            if user_idx is not None:
-                user_features[i] = {
-                    "log1p_user_following_count": train_users["log1p_user_following_count"][user_idx],
-                    "log1p_user_follower_count": train_users["log1p_user_follower_count"][user_idx],
-                    "log1p_user_likes_count": train_users["log1p_user_likes_count"][user_idx],
-                    "log1p_user_video_count": train_users["log1p_user_video_count"][user_idx],
-                    "log1p_user_digg_count": train_users["log1p_user_digg_count"][user_idx],
-                    "log1p_user_heart_count": train_users["log1p_user_heart_count"][user_idx],
-                    "log1p_follower_following_ratio": train_users["log1p_follower_following_ratio"][user_idx],
-                    "log1p_likes_per_video": train_users["log1p_likes_per_video"][user_idx],
-                    "log1p_hearts_per_video": train_users["log1p_hearts_per_video"][user_idx],
-                    "log1p_diggs_per_video": train_users["log1p_diggs_per_video"][user_idx],
-                    "log1p_likes_per_follower": train_users["log1p_likes_per_follower"][user_idx]
-                }
-            else:
-                # Default values if user not found
-                user_features[i] = {
-                    "log1p_user_following_count": 0.0, "log1p_user_follower_count": 0.0,
-                    "log1p_user_likes_count": 0.0, "log1p_user_video_count": 0.0,
-                    "log1p_user_digg_count": 0.0, "log1p_user_heart_count": 0.0,
-                    "log1p_follower_following_ratio": 0.0, "log1p_likes_per_video": 0.0,
-                    "log1p_hearts_per_video": 0.0, "log1p_diggs_per_video": 0.0,
-                    "log1p_likes_per_follower": 0.0
-                }
-        
-        # Add user features to existing batch
         out = {k: v for k, v in batch.items()}
-        
-        for feature in ["log1p_user_following_count", "log1p_user_follower_count", "log1p_user_likes_count",
-                       "log1p_user_video_count", "log1p_user_digg_count", "log1p_user_heart_count",
-                       "log1p_follower_following_ratio", "log1p_likes_per_video", "log1p_hearts_per_video",
-                       "log1p_diggs_per_video", "log1p_likes_per_follower"]:
-            out[feature] = [user_features[i][feature] for i in range(len(pids))]
-        
+
+        def get_user(field, default):
+            return [
+                train_users[field][user_idx[u]] if u in user_idx else default
+                for u in uids
+            ]
+
+        out.update({
+            "log1p_user_following_count": get_user("log1p_user_following_count", 0.0),
+            "log1p_user_follower_count":  get_user("log1p_user_follower_count", 0.0),
+            "log1p_user_likes_count":     get_user("log1p_user_likes_count", 0.0),
+            "log1p_user_video_count":     get_user("log1p_user_video_count", 0.0),
+            "log1p_user_digg_count":      get_user("log1p_user_digg_count", 0.0),
+            "log1p_user_heart_count":     get_user("log1p_user_heart_count", 0.0),
+            "log1p_follower_following_ratio": get_user("log1p_follower_following_ratio", 0.0),
+            "log1p_likes_per_video":      get_user("log1p_likes_per_video", 0.0),
+            "log1p_hearts_per_video":     get_user("log1p_hearts_per_video", 0.0),
+            "log1p_diggs_per_video":      get_user("log1p_diggs_per_video", 0.0),
+            "log1p_likes_per_follower":   get_user("log1p_likes_per_follower", 0.0),
+        })
         return out
     
     # Join with user features
@@ -292,35 +266,16 @@ def build_master_train_table(train_data, batch_size=1000):
     
     def join_video_features(batch):
         pids = batch["pid"]
-        
-        # Find corresponding video features
-        video_features = {}
-        for i, pid in enumerate(pids):
-            # Find video with matching pid
-            video_idx = None
-            for j, video_pid in enumerate(train_videos["pid"]):
-                if video_pid == pid:
-                    video_idx = j
-                    break
-            
-            if video_idx is not None:
-                video_features[i] = {
-                    "aspect_ratio": train_videos["aspect_ratio"][video_idx],
-                    "is_vertical": train_videos["is_vertical"][video_idx]
-                }
-            else:
-                # Default values if video not found
-                video_features[i] = {
-                    "aspect_ratio": 1.0,  # Default square aspect ratio
-                    "is_vertical": 0       # Default horizontal
-                }
-        
-        # Add video features to existing batch
         out = {k: v for k, v in batch.items()}
-        
-        out["aspect_ratio"] = [video_features[i]["aspect_ratio"] for i in range(len(pids))]
-        out["is_vertical"] = [video_features[i]["is_vertical"] for i in range(len(pids))]
-        
+
+        def get_video(field, default):
+            return [
+                train_videos[field][video_idx[p]] if p in video_idx else default
+                for p in pids
+            ]
+
+        out["aspect_ratio"] = get_video("aspect_ratio", 1.0)  # default: square
+        out["is_vertical"]  = get_video("is_vertical", 0.0)   # default: horizontal
         return out
     
     # Join with video features
@@ -337,51 +292,43 @@ def build_master_train_table(train_data, batch_size=1000):
         # Get embeddings for the train posts
         train_posts_for_emb = train_data["posts"].select_columns(["pid", "uid", "video_path", "post_content", "post_suggested_words"])
         embeddings_ds = compute_or_load_embeddings(train_posts_for_emb, cache_dir="./video_text_cache_train")
+        
         print(f"✅ Loaded embeddings dataset with {len(embeddings_ds)} samples")
     except Exception as e:
         print(f"⚠️  Warning: Could not load embeddings: {e}")
         print("Creating placeholder embeddings...")
         # Create placeholder embeddings dataset
-        from datasets import Dataset
-        placeholder_embeddings = {
-            "pid": train_data["posts"]["pid"],
-            "uid": train_data["posts"]["uid"],
-            "text_emb_f16": [[0.0] * 512] * len(train_data["posts"]),
-            "video_emb_f16": [[0.0] * 512] * len(train_data["posts"])
-        }
-        embeddings_ds = Dataset.from_dict(placeholder_embeddings)
+        
+
+        
     
+    emb_idx = {pid: i for i, pid in enumerate(embeddings_ds["pid"])}
+    text_embs  = embeddings_ds["text_emb_f16"]
+    video_embs = embeddings_ds["video_emb_f16"]
     def join_embeddings(batch):
         pids = batch["pid"]
-        
-        # Find corresponding embeddings
-        embeddings = {}
-        for i, pid in enumerate(pids):
-            # Find embedding with matching pid
-            emb_idx = None
-            for j, emb_pid in enumerate(embeddings_ds["pid"]):
-                if emb_pid == pid:
-                    emb_idx = j
-                    break
-            
-            if emb_idx is not None:
-                embeddings[i] = {
-                    "text_emb_f16": embeddings_ds["text_emb_f16"][emb_idx],
-                    "video_emb_f16": embeddings_ds["video_emb_f16"][emb_idx]
-                }
-            else:
-                # Default values if embedding not found
-                embeddings[i] = {
-                    "text_emb_f16": [0.0] * 512,
-                    "video_emb_f16": [0.0] * 512
-                }
-        
-        # Add embeddings to existing batch
         out = {k: v for k, v in batch.items()}
-        
-        out["text_emb_f16"] = [embeddings[i]["text_emb_f16"] for i in range(len(pids))]
-        out["video_emb_f16"] = [embeddings[i]["video_emb_f16"] for i in range(len(pids))]
-        
+
+        def first_dim(seq):
+            for item in seq:
+                if isinstance(item, list) and len(item) > 0:
+                    return len(item)
+            return 512
+
+        text_dim = first_dim(text_embs)
+        video_dim = first_dim(video_embs)
+
+        ZERO_TEXT  = [0.0] * text_dim
+        ZERO_VIDEO = [0.0] * video_dim
+
+        def get_emb(field_list, default):
+            return [
+                field_list[emb_idx[p]] if (p in emb_idx and field_list[emb_idx[p]] is not None) else default
+                for p in pids
+            ]
+
+        out["text_emb_f16"]  = get_emb(text_embs,  ZERO_TEXT)
+        out["video_emb_f16"] = get_emb(video_embs, ZERO_VIDEO)
         return out
     
     # Join with embeddings
@@ -480,7 +427,7 @@ def materialize_tensors(master_table, batch_size=1000):
     
     # Process all batches
     print("\nProcessing batches...")
-    all_meta_features = []
+    meta_batches = []
     all_targets = []
     all_pids = []
     
@@ -489,7 +436,14 @@ def materialize_tensors(master_table, batch_size=1000):
         batch = master_table.select(range(i, end_idx))
         processed = process_batch(batch)
         
-        all_meta_features.extend(processed["meta_features"])
+        x_meta_batch = np.asarray(processed["meta_features"], dtype=np.float32).T
+        # Safety: ensure rectangular inside the batch
+        if x_meta_batch.ndim != 2 or x_meta_batch.shape[0] != len(processed["pids"]) or x_meta_batch.shape[1] != len(metadata_columns):
+            lens = [len(col) for col in processed["meta_features"]]
+            raise ValueError(f"Non-rectangular batch at rows [{i}:{end_idx}]. "
+                            f"Per-column lengths={lens}, expected all == {len(processed['pids'])}")
+
+        meta_batches.append(x_meta_batch)
         all_targets.extend(processed["targets"])
         all_pids.extend(processed["pids"])
         
@@ -500,7 +454,7 @@ def materialize_tensors(master_table, batch_size=1000):
     print("\nConverting to numpy arrays...")
     
     # Metadata features: [D_meta, N_train] -> transpose to [N_train, D_meta]
-    x_meta = np.array(all_meta_features, dtype=np.float32).T
+    x_meta = np.vstack(meta_batches).astype(np.float32, copy=False)
     y = np.array(all_targets, dtype=np.float32)
     
     print(f"x_meta shape: {x_meta.shape}")

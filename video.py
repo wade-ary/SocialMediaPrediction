@@ -24,11 +24,11 @@ ds_test_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['test']
 # -----------------------
 MODEL_NAME = "microsoft/xclip-base-patch32"
 processor = XCLIPProcessor.from_pretrained(MODEL_NAME)
-if torch.cuda.is_available():
-    model = XCLIPModel.from_pretrained(MODEL_NAME, torch_dtype=torch.float16).to("cuda")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if device.type == "cuda":
+    model = XCLIPModel.from_pretrained(MODEL_NAME, torch_dtype=torch.float16).to(device)
 else:
-    model = XCLIPModel.from_pretrained(MODEL_NAME)
-    model.to("cpu")
+    model = XCLIPModel.from_pretrained(MODEL_NAME).to(device)
 model.eval()
 
 
@@ -116,17 +116,20 @@ def sample_video_frames(video_path, num_frames=8, target_size=224):
 def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_size=224):
     """
     Adds columns to a NEW HF Dataset:
-      - paired_text (str)
       - text_emb_f16 (List[float16] or None)
       - video_emb_f16 (List[float16] or None)
-      - proc_status (str: 'ok', 'missing_video', 'decode_error', 'empty_text', 'processor_error')
+      - proc_status (str: 'ok', 'empty_text', 'missing_video', 'decode_error', 'processor_error')
+      - error_detail (str short trace / message for debugging)
+      - abs_video_path (str absolute path used for video)
     """
+    import traceback
+
     required = ["pid", "uid", "video_path", "post_content", "post_suggested_words"]
     missing = [c for c in required if c not in posts_ds.column_names]
     if missing:
         raise ValueError(f"Missing required columns in posts_ds: {missing}")
 
-    downloads_root = os.path.expanduser("~/Downloads/video_file")
+    downloads_root = os.path.expanduser("~/Downloads/video_file/")
 
     def _mapper(batch):
         pids   = batch["pid"]
@@ -140,6 +143,7 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
         paired_texts = []
         abs_paths = []
         status = ["ok"] * n
+        err    = [""] * n
 
         # Build paired text and absolute paths
         for i in range(n):
@@ -149,10 +153,10 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
             paired_texts.append(text)
 
             rel_path = str(paths[i]) if paths[i] is not None else ""
-            # prepend ~/Downloads/, ensure no accidental '//' joins
             abs_path = os.path.join(downloads_root, rel_path.lstrip("/"))
             if not os.path.exists(abs_path):
                 status[i] = "missing_video"
+                err[i] = f"not found: {abs_path}"
             abs_paths.append(abs_path)
 
         # Sample frames where possible
@@ -164,66 +168,76 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
             try:
                 frames_list[i] = sample_video_frames(abs_paths[i], num_frames=num_frames, target_size=target_size)
                 valid_idx.append(i)
-            except Exception:
+            except Exception as e:
                 status[i] = "decode_error"
+                err[i] = (repr(e) + "\n" + traceback.format_exc())[:2000]
                 frames_list[i] = None
 
-        # Prepare model inputs for valid rows
         text_emb_out  = [None] * n
         video_emb_out = [None] * n
 
+        # Processor + model on valid rows
         if valid_idx:
             try:
                 vids_batch = [frames_list[i] for i in valid_idx]
                 txts_batch = [paired_texts[i] for i in valid_idx]
 
-                inputs = processor(
-                    text=txts_batch,
-                    videos=vids_batch,
+                text_inputs = processor.tokenizer(
+                    txts_batch,
+                    padding=True,
+                    truncation=True,
+                    max_length=77,        # X-CLIP text max positions = 77
                     return_tensors="pt",
-                    padding=True
                 )
+
+                # build video inputs (image processor only)
+                video_inputs = processor.image_processor(
+                    images=vids_batch,     # list/array of videos or frames in VideoMAE format
+                    return_tensors="pt",
+                )
+
+                # merge for the model
+                inputs = {**text_inputs, **video_inputs}
+
                 # Move to device
                 for k, v in inputs.items():
                     if isinstance(v, torch.Tensor):
                         inputs[k] = v.to(device, non_blocking=True)
 
-                if device == "cuda":
-                    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+                with torch.inference_mode():
+                    if device.type == "cuda":
+                        with torch.autocast("cuda", dtype=torch.float16):
+                            outputs = model(**inputs)
+                    else:
                         outputs = model(**inputs)
-                else:
-                    with torch.inference_mode():
-                        outputs = model(**inputs)
-                
-                # (B, D) - Extract embeddings outside the device-specific blocks
-                    vemb = outputs.video_embeds
-                    temb = outputs.text_embeds
 
-                    # L2-normalize
-                    vemb = torch.nn.functional.normalize(vemb, p=2, dim=1)
-                    temb = torch.nn.functional.normalize(temb, p=2, dim=1)
+                # IMPORTANT: extract outside the device branch
+                vemb = outputs.video_embeds
+                temb = outputs.text_embeds
 
-                    # to float16 CPU lists
-                    vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
-                    temb = temb.detach().to("cpu").to(torch.float16).numpy()
+                if vemb.ndim == 3:                   # (B, T, D)
+                    vemb = vemb.mean(dim=1)          # -> (B, D)
+                if temb.ndim == 3:                   # (B, T, D) some HF versions broadcast text over frames
+                    temb = temb.mean(dim=1)          # -> (B, D)
 
-                # Scatter back
+                # Sanity: now both must be (B, D)
+                assert vemb.ndim == 2 and temb.ndim == 2, f"Unexpected shapes: v={vemb.shape}, t={temb.shape}"
+
+                # To CPU float16 lists
+                vemb = vemb.detach().to("cpu").to(torch.float16).numpy()
+                temb = temb.detach().to("cpu").to(torch.float16).numpy()
+
+                # Scatter back (no normalization here; keep pipeline pure)
                 for j, i in enumerate(valid_idx):
-                    # Get individual embeddings 
-                    video_emb = vemb[j].reshape(-1)  # Flatten to (512,)
-                    text_emb = temb[j].reshape(-1)   # Flatten to (512,)
-                    
-                    # Re-normalize after reshaping to ensure unit norm
-                    video_emb = video_emb / np.linalg.norm(video_emb)
-                    text_emb = text_emb / np.linalg.norm(text_emb)
-                    
-                    video_emb_out[i] = video_emb.tolist()
-                    text_emb_out[i]  = text_emb.tolist()
+                    video_emb_out[i] = vemb[j].reshape(-1).tolist()
+                    text_emb_out[i]  = temb[j].reshape(-1).tolist()
 
-            except Exception:
-                # If processor/model fails for the whole sub-batch
+            except Exception as e:
+                # Mark processor/model failure for *those* valid rows
+                msg = (repr(e) + "\n" + traceback.format_exc())[:2000]
                 for i in valid_idx:
                     status[i] = "processor_error"
+                    err[i] = msg
                     video_emb_out[i] = None
                     text_emb_out[i]  = None
 
@@ -232,17 +246,19 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
             "uid": uids,
             "text_emb_f16": text_emb_out,
             "video_emb_f16": video_emb_out,
+            "proc_status": status,
+            "error_detail": err,
+            "abs_video_path": abs_paths,
         }
 
-    # batched=True uses our _mapper on chunks of rows;
-    # batch_size here controls how many rows per map-call (unrelated to XCLIP frame count).
     video_text_features = posts_ds.map(_mapper, batched=True, batch_size=batch_size)
-    # Optionally filter to only keep specific columns
-    video_text_features = video_text_features.select_columns(["pid", "uid", "text_emb_f16", "video_emb_f16"])
+    # Keep debug columns!
+    keep_cols = ["pid", "uid", "text_emb_f16", "video_emb_f16", "proc_status", "error_detail", "abs_video_path"]
+    video_text_features = video_text_features.select_columns(keep_cols)
     return video_text_features
 
 
-def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache", **kwargs):
+def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache_train", **kwargs):
     """
     Load cached dataset if it exists; else compute with build_video_text_embeddings(),
     save to disk once, and return it.
@@ -253,6 +269,7 @@ def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache", **kwarg
     ds = build_video_text_embeddings(posts_ds, **kwargs)
     ds.save_to_disk(cache_dir)
     return ds
+
 
 
 
