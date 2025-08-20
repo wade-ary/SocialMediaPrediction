@@ -298,130 +298,17 @@ def build_post_features(posts_ds, *, batch_size=1000, min_count=1):
 
     # Remove unwanted columns
     posts_features = posts_features.remove_columns([
-        "post_content",
+
         "post_location", 
-        "post_suggested_words",
+     
         "post_text_language",
-        "video_path",
+   
         "post_time"
     ])
     
     return posts_features
 
-    """
-    Returns a NEW HF Dataset with:
-      - time features: hour, minute, minute_of_day, sin_time, cos_time
-      - one-hot for post_text_language and post_location (with optional top-K + OTHER bucket)
-    Identifiers (pid, uid) are kept but not transformed.
-    Columns ignored for now: post_content, post_suggested_words, video_path.
-    """
-    required = ["post_time", "post_text_language", "post_location"]
-    missing = [c for c in required if c not in posts_ds.column_names]
-    if missing:
-        raise ValueError(f"Missing required columns in posts_ds: {missing}")
-
-    # ----- Build vocabularies for one-hot (on full dataset) -----
-    langs_all = posts_ds["post_text_language"]
-    locs_all  = posts_ds["post_location"]
-
-    lang_vocab, lang_counts = _build_one_hot_vocab(langs_all, top_k=top_k_lang, min_count=min_count)
-    loc_vocab,  loc_counts  = _build_one_hot_vocab(locs_all,  top_k=top_k_loc,  min_count=min_count)
-
-    lang_set = set(lang_vocab)
-    loc_set  = set(loc_vocab)
-
-    # Column names for one-hot
-    lang_cols = [f"lang__{_slug(c)}" for c in lang_vocab]
-    loc_cols  = [f"loc__{_slug(c)}"  for c in loc_vocab]
-    has_lang_other = True
-    has_loc_other  = True
-    lang_other_col = "lang__other" if has_lang_other else None
-    loc_other_col  = "loc__other"  if has_loc_other else None
-
-    # ----- Mapper -----
-    def _add_features(batch):
-        times = batch["post_time"]
-        langs = batch["post_text_language"]
-        locs  = batch["post_location"]
-
-        n = len(times)
-
-        # Time features
-        hour = np.zeros(n, dtype=np.int16)
-        minute = np.zeros(n, dtype=np.int16)
-        minute_of_day = np.zeros(n, dtype=np.int32)
-
-        for i, ts in enumerate(times):
-            if ts is None:
-                h, m = 0, 0
-            else:
-                # If it's already a Python datetime
-                if hasattr(ts, "hour") and hasattr(ts, "minute"):
-                    h, m = ts.hour, ts.minute
-                else:
-                    # If it's a NumPy datetime64
-                    dt = np.datetime64(ts, 's').astype(object)
-                    h, m = dt.hour, dt.minute
-            hour[i] = h
-            minute[i] = m
-            minute_of_day[i] = h * 60 + m
-
-        # Cyclical encoding (period = 1440 minutes)
-        angle = (2.0 * math.pi * minute_of_day.astype(np.float64)) / 1440.0
-        sin_time = np.sin(angle)
-        cos_time = np.cos(angle)
-
-        # One-hot encoding for language/location
-        # Initialize zeros for all defined columns in this batch
-        out = {
-            "hour": hour.tolist(),
-            "minute": minute.tolist(),
-            "minute_of_day": minute_of_day.tolist(),
-            "sin_time": sin_time.tolist(),
-            "cos_time": cos_time.tolist(),
-        }
-
-        # Prepare zero arrays for one-hots
-        for col in lang_cols:
-            out[col] = [0] * n
-        if has_lang_other:
-            out[lang_other_col] = [0] * n
-
-        for col in loc_cols:
-            out[col] = [0] * n
-        if has_loc_other:
-            out[loc_other_col] = [0] * n
-
-        # Fill one-hots
-        for i in range(n):
-            lang = langs[i] if langs[i] is not None else "unknown"
-            loc  = locs[i]  if locs[i]  is not None else "unknown"
-
-            if lang in lang_set:
-                out[f"lang__{_slug(lang)}"][i] = 1
-            elif has_lang_other:
-                out[lang_other_col][i] = 1
-
-            if loc in loc_set:
-                out[f"loc__{_slug(loc)}"][i] = 1
-            elif has_loc_other:
-                out[loc_other_col][i] = 1
-
-        return out
-
-    posts_features = posts_ds.map(_add_features, batched=True, batch_size=batch_size)
     
-    # Remove unwanted columns, keep pid, uid and engineered features
-    posts_features = posts_features.remove_columns([
-        "post_content",
-        "post_location", 
-        "post_suggested_words",
-        "post_text_language",
-        "video_path",
-        "post_time"
-    ])
-    
-    return posts_features
 
 
 ds_train_post_features = build_post_features(ds_train_posts)

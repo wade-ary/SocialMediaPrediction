@@ -4,3 +4,4 @@ transformers
 torchvision
 opencv-python
 av
+torch
