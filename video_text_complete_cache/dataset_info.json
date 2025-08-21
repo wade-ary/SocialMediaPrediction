@@ -1,0 +1,78 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "posts",
+  "dataset_name": "smp-video",
+  "dataset_size": 2015914,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/smpchallenge/SMP-Video@d85f37dabd68150883b1feeb1832427891515f6f/train/SMP-Video_anonymized_posts_train.jsonl": {
+      "num_bytes": 1818352,
+      "checksum": null
+    },
+    "hf://datasets/smpchallenge/SMP-Video@d85f37dabd68150883b1feeb1832427891515f6f/test/SMP-Video_anonymized_posts_test.jsonl": {
+      "num_bytes": 991144,
+      "checksum": null
+    }
+  },
+  "download_size": 2809496,
+  "features": {
+    "pid": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "uid": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "text_emb_f16": {
+      "feature": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "video_emb_f16": {
+      "feature": {
+        "dtype": "float64",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "proc_status": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "error_detail": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "abs_video_path": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 4825410,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 1289038,
+      "num_examples": 4000,
+      "dataset_name": "smp-video"
+    },
+    "test": {
+      "name": "test",
+      "num_bytes": 726876,
+      "num_examples": 2000,
+      "dataset_name": "smp-video"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

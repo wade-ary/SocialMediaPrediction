@@ -1,6 +1,7 @@
 from data_process import build_post_features, build_target_features, build_user_features, build_video_features
 from data_process import *
 from datasets import load_dataset
+from complete_embeddings import get_embeddings_for_split
 from collections import Counter
 import re
 import math
@@ -13,9 +14,9 @@ ds_train_labels = load_dataset("smpchallenge/SMP-Video", 'labels')['train']
 
 
 
-def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1, random_seed=42):
+def create_train_val_split(labels_ds, posts_ds, users_ds, videos_ds, train_ratio=0.8, random_seed=42):
     """
-    Create deterministic train/val/test split grouped by pid to prevent leakage.
+    Create deterministic train/val split grouped by pid to prevent leakage.
     Split the labels dataset first, then get corresponding data from other datasets.
     
     Args:
@@ -24,12 +25,10 @@ def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_
         users_ds: Users features dataset  
         videos_ds: Video features dataset
         train_ratio: Training split ratio (default 0.8)
-        val_ratio: Validation split ratio (default 0.1)
-        test_ratio: Test split ratio (default 0.1)
         random_seed: Random seed for reproducibility (default 42)
     
     Returns:
-        tuple: (train_data, val_data, test_data) where each contains all 4 datasets
+        tuple: (train_data, val_data) where each contains all 4 datasets
     """
     import random
     
@@ -47,17 +46,14 @@ def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_
     # Calculate split indices
     n_posts = len(unique_pids)
     n_train = int(n_posts * train_ratio)
-    n_val = int(n_posts * val_ratio)
-    n_test = n_posts - n_train - n_val  # Handle rounding
+    n_val = n_posts - n_train  # Remaining goes to validation
     
     # Split posts
     train_pids = set(unique_pids[:n_train])
-    val_pids = set(unique_pids[n_train:n_train + n_val])
-    test_pids = set(unique_pids[n_train + n_val:])
+    val_pids = set(unique_pids[n_train:])
     
     print(f"Train posts: {len(train_pids)} ({len(train_pids)/n_posts*100:.1f}%)")
     print(f"Val posts: {len(val_pids)} ({len(val_pids)/n_posts*100:.1f}%)")
-    print(f"Test posts: {len(test_pids)} ({len(test_pids)/n_posts*100:.1f}%)")
     
     # Function to filter dataset by post IDs
     def filter_by_pids(dataset, pids_to_keep):
@@ -68,18 +64,15 @@ def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_
     # Split labels dataset
     train_labels = filter_by_pids(labels_ds, train_pids)
     val_labels = filter_by_pids(labels_ds, val_pids)
-    test_labels = filter_by_pids(labels_ds, test_pids)
     
     # Split posts dataset
     train_posts = filter_by_pids(posts_ds, train_pids)
     val_posts = filter_by_pids(posts_ds, val_pids)
-    test_posts = filter_by_pids(posts_ds, test_pids)
     
     # Split users dataset - users are filtered by uid, not pid
     # We need to get the uids from the labels first, then filter users
     train_uids = set(train_labels["uid"])
     val_uids = set(val_labels["uid"])
-    test_uids = set(test_labels["uid"])
     
     def filter_by_uids(dataset, uids_to_keep):
         # Get indices where uid is in the set
@@ -88,12 +81,10 @@ def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_
     
     train_users = filter_by_uids(users_ds, train_uids)
     val_users = filter_by_uids(users_ds, val_uids)
-    test_users = filter_by_uids(users_ds, test_uids)
     
     # Split videos dataset
     train_videos = filter_by_pids(videos_ds, train_pids)
     val_videos = filter_by_pids(videos_ds, val_pids)
-    test_videos = filter_by_pids(videos_ds, test_pids)
     
     # Create data dictionaries
     train_data = {
@@ -110,24 +101,16 @@ def create_train_val_test_split(labels_ds, posts_ds, users_ds, videos_ds, train_
         "videos": val_videos
     }
     
-    test_data = {
-        "labels": test_labels,
-        "posts": test_posts,
-        "users": test_users,
-        "videos": test_videos
-    }
-    
     # Print split statistics
     print(f"\nSplit Statistics:")
     print(f"Train: {len(train_labels)} samples")
     print(f"Val: {len(val_labels)} samples")
-    print(f"Test: {len(test_labels)} samples")
     
-    return train_data, val_data, test_data
+    return train_data, val_data
 
 # Create the splits
 print(f"\n{'='*60}")
-print("CREATING TRAIN/VAL/TEST SPLITS")
+print("CREATING TRAIN/VAL SPLITS")
 print(f"{'='*60}")
 
 processed_targets, train_cap_value = build_target_features(ds_train_labels)
@@ -135,15 +118,15 @@ processed_posts = build_post_features(ds_train_posts)
 processed_users = build_user_features(ds_train_users)
 processed_videos = build_video_features(ds_train_videos)
 
-train_data, val_data, test_data = create_train_val_test_split(
+train_data, val_data = create_train_val_split(
     processed_targets,
-   processed_posts, 
+    processed_posts, 
     processed_users,
-   processed_videos
+    processed_videos
 )
 
-print(f"\n✅ Train/Val/Test splits created successfully!")
-print(f"Use train_data, val_data, test_data for your training pipeline.")
+print(f"\n✅ Train/Val splits created successfully!")
+print(f"Use train_data, val_data for your training pipeline.")
 
 
 
@@ -288,15 +271,15 @@ def build_master_train_table(train_data, batch_size=1000):
     
     # Load embeddings dataset (assuming it's cached)
     try:
-        from video import compute_or_load_embeddings
-        # Get embeddings for the train posts
-        train_posts_for_emb = train_data["posts"].select_columns(["pid", "uid", "video_path", "post_content", "post_suggested_words"])
-        embeddings_ds = compute_or_load_embeddings(train_posts_for_emb, cache_dir="./video_text_cache_train")
+        from complete_embeddings import get_embeddings_for_split
+        # Get embeddings for the current data split from complete cache
+        embeddings_ds = get_embeddings_for_split(train_posts, cache_dir="./video_text_complete_cache")
         
         print(f"✅ Loaded embeddings dataset with {len(embeddings_ds)} samples")
     except Exception as e:
         print(f"⚠️  Warning: Could not load embeddings: {e}")
         print("Creating placeholder embeddings...")
+        # Create placeholder embeddings dataset
         # Create placeholder embeddings dataset
         
 
@@ -350,6 +333,7 @@ print("BUILDING MASTER TRAINING TABLE")
 print(f"{'='*60}")
 
 master_train_table = build_master_train_table(train_data)
+master_val_table = build_master_train_table(val_data)
 
 print(f"\n✅ Master training table created successfully!")
 print(f"Shape: {master_train_table.shape}")
@@ -596,7 +580,7 @@ print("MATERIALIZING TRAINING TENSORS")
 print(f"{'='*60}")
 
 tensor_info = materialize_tensors(master_train_table)
-
+val_tensor_info = materialize_tensors(master_val_table)
 print(f"\n✅ Training tensors materialized successfully!")
 print(f"Metadata dimension: {tensor_info['meta_cont_dim']}")
 print(f"Embedding dimension: {tensor_info['emb_in_dim']}")
