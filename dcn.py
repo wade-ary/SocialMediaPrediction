@@ -6,18 +6,12 @@ from data_process import *
 import torch
 import torch.nn as nn
 
-# -----------------------
-# Load all datasets
-# -----------------------
-print("Loading datasets...")
-
-
 
 
 import torch
 import torch.nn as nn
 
-# ----- Cross Network (Deep & Cross) -----
+#  Cross Network (Deep & Cross) 
 class CrossLayer(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -38,7 +32,7 @@ class CrossNet(nn.Module):
             xl = layer(x0, xl)
         return xl
 
-# ----- Head 1: Metadata encoder (simple MLP over cont + cat embeddings) -----
+# Head 1: Metadata encoder (simple MLP over cont + cat embeddings) 
 class MetaEncoder(nn.Module):
     def __init__(self, n_cont: int, hidden: int = 128):
         super().__init__()
@@ -55,7 +49,7 @@ class MetaEncoder(nn.Module):
             raise ValueError("Expected continuous inputs")
         return self.mlp(x)
 
-# ----- Head 2: Embedding encoder for concatenated video+text embedding -----
+# Head 2: Embedding encoder for concatenated video+text embedding 
 class EmbedEncoder(nn.Module):
     def __init__(self, in_dim=1024, hidden=256):
         super().__init__()
@@ -67,7 +61,7 @@ class EmbedEncoder(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-# ----- Full two-head Deep & Cross regressor -----
+# Full two-head Deep & Cross regressor
 class TwoHeadDCN(nn.Module):
     def __init__(self, meta_cont_dim,emb_in_dim=1024,
                  meta_hidden=128, emb_hidden=256, cross_layers=3):

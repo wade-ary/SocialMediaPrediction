@@ -2,16 +2,15 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
-# ---- import your data pipeline bits ----
-# Assumes these names are in your data_organisation.py exactly as you showed.
+# import data pipeline
 from data_organisation import (
     build_master_train_table,
     materialize_tensors,
-    train_data,   # this is the dict with train splits you constructed earlier
+    train_data, 
 )
 
 
-# ------------- Dataset wrapper -------------
+#  Dataset wrapper 
 class SMPDataset(Dataset):
     def __init__(self, x_meta: np.ndarray, pair_emb: np.ndarray, y: np.ndarray):
         assert x_meta.ndim == 2, f"x_meta must be (N, D), got {x_meta.shape}"
@@ -29,7 +28,6 @@ class SMPDataset(Dataset):
     def __getitem__(self, idx):
         return {
             "x_cont": self.x_meta[idx],     # (D_meta,)
-                   # you already one-hot encoded; keep None
             "pair":   self.pair_emb[idx],   # (emb_in_dim,)
             "y":      self.y[idx],          # scalar target
         }
@@ -50,7 +48,7 @@ def main():
     ds = SMPDataset(x_meta, pair_emb, y)
     dl = DataLoader(ds, batch_size=256, shuffle=True, num_workers=0, pin_memory=True)
 
-    # pull one sanity batch
+    
     batch = next(iter(dl))
     print("One batch:")
     print(" x_cont  :", batch["x_cont"].shape)   # (B, 30)

@@ -6,6 +6,7 @@ from collections import Counter
 import re
 import math
 import numpy as np
+import random
 
 ds_train_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['train']
 ds_train_users = load_dataset("smpchallenge/SMP-Video", 'users')['train']
@@ -18,19 +19,7 @@ def create_train_val_split(labels_ds, posts_ds, users_ds, videos_ds, train_ratio
     """
     Create deterministic train/val split grouped by pid to prevent leakage.
     Split the labels dataset first, then get corresponding data from other datasets.
-    
-    Args:
-        labels_ds: Processed labels dataset with pid, uid, popularity_log1p
-        posts_ds: Posts features dataset
-        users_ds: Users features dataset  
-        videos_ds: Video features dataset
-        train_ratio: Training split ratio (default 0.8)
-        random_seed: Random seed for reproducibility (default 42)
-    
-    Returns:
-        tuple: (train_data, val_data) where each contains all 4 datasets
     """
-    import random
     
     # Set random seed for reproducibility
     random.seed(random_seed)
@@ -108,39 +97,12 @@ def create_train_val_split(labels_ds, posts_ds, users_ds, videos_ds, train_ratio
     
     return train_data, val_data
 
-# Create the splits
-print(f"\n{'='*60}")
-print("CREATING TRAIN/VAL SPLITS")
-print(f"{'='*60}")
-
-processed_targets, train_cap_value = build_target_features(ds_train_labels)
-processed_posts = build_post_features(ds_train_posts)
-processed_users = build_user_features(ds_train_users)
-processed_videos = build_video_features(ds_train_videos)
-
-train_data, val_data = create_train_val_split(
-    processed_targets,
-    processed_posts, 
-    processed_users,
-    processed_videos
-)
-
-print(f"\n✅ Train/Val splits created successfully!")
-print(f"Use train_data, val_data for your training pipeline.")
-
-
 
 def build_master_train_table(train_data, batch_size=1000):
     """
     Build a master training table that joins all features by pid.
     Each row represents one post with all its features and embeddings.
     
-    Args:
-        train_data: Dictionary containing train splits for labels, posts, users, videos
-        batch_size: Batch size for processing
-    
-    Returns:
-        HuggingFace Dataset: Master table with all features joined by pid
     """
     print(f"\n{'='*60}")
     print("BUILDING MASTER TRAINING TABLE")
@@ -162,8 +124,8 @@ def build_master_train_table(train_data, batch_size=1000):
     video_idx = {pid: i for i, pid in enumerate(train_videos["pid"])}
     emb_idx = {pid: i for i, pid in enumerate(train_posts["pid"])}
     
-    # First, let's join labels with posts (they both have pid, uid)
-    print("\nJoining labels with posts...")
+    # Join labels with Posts
+    print("\nJoining labels with posts")
     
     def join_labels_posts(batch):
         pids = batch["pid"]
@@ -209,10 +171,10 @@ def build_master_train_table(train_data, batch_size=1000):
     # Join labels with posts
     labels_posts_joined = train_labels.map(join_labels_posts, batched=True, batch_size=batch_size)
     
-    print("✅ Labels + Posts joined")
+    print("Labels + Posts joined")
     
-    # Now join with user features
-    print("\nJoining with user features...")
+    # Join with user features
+    print("\nJoining with user features")
     
     def join_user_features(batch):
         uids = batch["uid"]
@@ -242,9 +204,9 @@ def build_master_train_table(train_data, batch_size=1000):
     # Join with user features
     all_features_joined = labels_posts_joined.map(join_user_features, batched=True, batch_size=batch_size)
     
-    print("✅ User features joined")
+    print("User features joined")
     
-    # Now join with video features
+    # Join with video features
     print("\nJoining with video features...")
     
     def join_video_features(batch):
@@ -264,9 +226,9 @@ def build_master_train_table(train_data, batch_size=1000):
     # Join with video features
     master_table = all_features_joined.map(join_video_features, batched=True, batch_size=batch_size)
     
-    print("✅ Video features joined")
+    print("Video features joined")
     
-    # Now join with video-text embeddings
+    # Join with video-text embeddings
     print("\nJoining with video-text embeddings...")
     
     # Load embeddings dataset (assuming it's cached)
@@ -275,16 +237,10 @@ def build_master_train_table(train_data, batch_size=1000):
         # Get embeddings for the current data split from complete cache
         embeddings_ds = get_embeddings_for_split(train_posts, cache_dir="./video_text_complete_cache")
         
-        print(f"✅ Loaded embeddings dataset with {len(embeddings_ds)} samples")
+        print(f"Loaded embeddings dataset with {len(embeddings_ds)} samples")
     except Exception as e:
         print(f"⚠️  Warning: Could not load embeddings: {e}")
-        print("Creating placeholder embeddings...")
-        # Create placeholder embeddings dataset
-        # Create placeholder embeddings dataset
         
-
-        
-    
     emb_idx = {pid: i for i, pid in enumerate(embeddings_ds["pid"])}
     text_embs  = embeddings_ds["text_emb_f16"]
     video_embs = embeddings_ds["video_emb_f16"]
@@ -317,7 +273,7 @@ def build_master_train_table(train_data, batch_size=1000):
     # Join with embeddings
     master_table_with_emb = master_table.map(join_embeddings, batched=True, batch_size=batch_size)
     
-    print("✅ Embeddings joined")
+    print("Embeddings joined")
     
     # Print final table info
     print(f"\nMaster table shape: {master_table_with_emb.shape}")
@@ -327,34 +283,19 @@ def build_master_train_table(train_data, batch_size=1000):
     
     return master_table_with_emb
 
-# Build the master training table
-print(f"\n{'='*60}")
-print("BUILDING MASTER TRAINING TABLE")
-print(f"{'='*60}")
 
-master_train_table = build_master_train_table(train_data)
-master_val_table = build_master_train_table(val_data)
 
-print(f"\n✅ Master training table created successfully!")
-print(f"Shape: {master_train_table.shape}")
-print(f"Columns: {len(master_train_table.column_names)}")
 
 def materialize_tensors(master_table, batch_size=1000):
     """
     Materialize training tensors from the master table with strict dtypes and shapes.
-    
-    Args:
-        master_table: Master training table with all features
-        batch_size: Batch size for processing
-    
-    Returns:
-        dict: Contains tensors, dimensions, and metadata column order
+
     """
     print(f"\n{'='*60}")
     print("MATERIALIZING TRAINING TENSORS")
     print(f"{'='*60}")
     
-    # Define metadata columns (frozen, no embeddings)
+    # Define metadata columns 
     metadata_columns = [
         # Time features
         "hour", "minute", "minute_of_day", "sin_time", "cos_time",
@@ -410,7 +351,7 @@ def materialize_tensors(master_table, batch_size=1000):
         }
     
     # Process all batches
-    print("\nProcessing batches...")
+    print("\nProcessing batches")
     meta_batches = []
     all_targets = []
     all_pids = []
@@ -453,12 +394,12 @@ def materialize_tensors(master_table, batch_size=1000):
     
     # Check for NaNs
     if np.isnan(x_meta).any():
-        print("⚠️  Warning: NaN values found in metadata features")
+        print("Warning: NaN values found in metadata features")
         # Replace NaNs with 0
         x_meta = np.nan_to_num(x_meta, nan=0.0)
     
     if np.isnan(y).any():
-        print("⚠️  Warning: NaN values found in targets")
+        print("Warning: NaN values found in targets")
         # Replace NaNs with 0
         y = np.nan_to_num(y, nan=0.0)
     
@@ -468,14 +409,14 @@ def materialize_tensors(master_table, batch_size=1000):
     print(f"Total rows: {N_train}")
     
     if len(unique_pids) != N_train:
-        print("⚠️  Warning: Duplicate PIDs found - not one row per pid")
+        print("Warning: Duplicate PIDs found - not one row per pid")
     
     # Extract real embeddings from the master table
     print("\nExtracting real embeddings...")
     
     # Check if embeddings exist in the master table
     if "text_emb_f16" in master_table.column_names and "video_emb_f16" in master_table.column_names:
-        print("✅ Found text and video embeddings in master table")
+        print("Found text and video embeddings in master table")
         
         # Check for excessive zero embeddings (indicates serious issue)
         zero_text_count = 0
@@ -539,7 +480,7 @@ def materialize_tensors(master_table, batch_size=1000):
             D_emb = D_text
             
     else:
-        print("⚠️  No embeddings found in master table, creating placeholders...")
+        print(" No embeddings found in master table, creating placeholders...")
         D_emb = 1024  # Default embedding dimension
         pair_emb = np.zeros((N_train, D_emb), dtype=np.float32)
     
@@ -570,19 +511,7 @@ def materialize_tensors(master_table, batch_size=1000):
         tensor_info["video_emb"] = video_emb
         tensor_info["text_emb_dim"] = D_text
         tensor_info["video_emb_dim"] = D_video
-        print(f"✅ Added individual embeddings: text({D_text}), video({D_video})")
+        print(f"Added individual embeddings: text({D_text}), video({D_video})")
     
     return tensor_info
 
-# Materialize training tensors
-print(f"\n{'='*60}")
-print("MATERIALIZING TRAINING TENSORS")
-print(f"{'='*60}")
-
-tensor_info = materialize_tensors(master_train_table)
-val_tensor_info = materialize_tensors(master_val_table)
-print(f"\n✅ Training tensors materialized successfully!")
-print(f"Metadata dimension: {tensor_info['meta_cont_dim']}")
-print(f"Embedding dimension: {tensor_info['emb_in_dim']}")
-print(f"Training samples: {tensor_info['N_train']}")
-print(f"Metadata columns: {len(tensor_info['metadata_columns'])}")

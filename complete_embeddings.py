@@ -7,13 +7,6 @@ def cache_complete_embeddings(cache_dir="./video_text_complete_cache", batch_siz
     """
     Cache embeddings for the complete training dataset (all posts).
     This ensures the cache is always valid regardless of how you split the data.
-    
-    Args:
-        cache_dir: Directory to save the complete embeddings cache
-        batch_size: Batch size for processing
-    
-    Returns:
-        HuggingFace Dataset: Complete embeddings dataset
     """
     print(f"\n{'='*80}")
     print("CACHING COMPLETE EMBEDDINGS DATASET")
@@ -25,23 +18,23 @@ def cache_complete_embeddings(cache_dir="./video_text_complete_cache", batch_siz
     
     # Check if cache already exists
     if os.path.exists(cache_dir):
-        print(f"✅ Loading existing complete cache from: {cache_dir}")
+        print(f"Loading existing complete cache from: {cache_dir}")
         embeddings_full = load_from_disk(cache_dir)
         print(f"Loaded {len(embeddings_full)} cached embeddings")
         return embeddings_full
     
     # Cache doesn't exist, compute embeddings for all posts
-    print(f"🔄 Computing embeddings for all posts...")
+    print(f"Computing embeddings for all posts...")
     print(f"This may take a while for {len(ds_train_posts)} posts...")
     
     # Compute embeddings for the complete dataset
     embeddings_full = build_video_text_embeddings(ds_train_posts, batch_size=batch_size)
     
     # Save to disk
-    print(f"💾 Saving complete embeddings to: {cache_dir}")
+    print(f"Saving complete embeddings to: {cache_dir}")
     embeddings_full.save_to_disk(cache_dir)
     
-    print(f"✅ Complete embeddings cached successfully!")
+    print(f"Complete embeddings cached successfully!")
     print(f"Total embeddings: {len(embeddings_full)}")
     print(f"Cache location: {cache_dir}")
     
@@ -61,7 +54,7 @@ def get_embeddings_for_pids(embeddings_full, target_pids, verbose=True):
         HuggingFace Dataset: Filtered embeddings dataset with only target PIDs
     """
     if verbose:
-        print(f"🔍 Retrieving embeddings for {len(target_pids)} PIDs from complete cache...")
+        print(f"Retrieving embeddings for {len(target_pids)} PIDs from complete cache.")
     
     # Create a set for faster lookup
     target_pids_set = set(target_pids)
@@ -79,7 +72,7 @@ def get_embeddings_for_pids(embeddings_full, target_pids, verbose=True):
     filtered_embeddings = embeddings_full.select(matching_indices)
     
     if verbose:
-        print(f"✅ Retrieved {len(filtered_embeddings)} embeddings")
+        print(f"Retrieved {len(filtered_embeddings)} embeddings")
     
     return filtered_embeddings
 
@@ -87,20 +80,11 @@ def get_embeddings_for_pids(embeddings_full, target_pids, verbose=True):
 def get_embeddings_for_split(data_split, embeddings_full=None, cache_dir="./video_text_complete_cache", verbose=True):
     """
     Convenience function to get embeddings for a specific data split.
-    
-    Args:
-        data_split: Dictionary containing 'posts' with PIDs
-        embeddings_full: Complete embeddings dataset (if None, loads from cache)
-        cache_dir: Cache directory for complete embeddings
-        verbose: Whether to print progress information
-    
-    Returns:
-        HuggingFace Dataset: Filtered embeddings for the split
     """
     # Load complete embeddings if not provided
     if embeddings_full is None:
         if not os.path.exists(cache_dir):
-            print(f"❌ Complete cache not found at {cache_dir}")
+            print(f"Complete cache not found at {cache_dir}")
             print("Please run cache_complete_embeddings() first")
             return None
         embeddings_full = load_from_disk(cache_dir)
@@ -120,7 +104,7 @@ def inspect_complete_cache(cache_dir="./video_text_complete_cache"):
         cache_dir: Path to the complete cache directory
     """
     if not os.path.exists(cache_dir):
-        print(f"❌ Complete cache not found at: {cache_dir}")
+        print(f"Complete cache not found at: {cache_dir}")
         return
     
     print(f"\n{'='*80}")
@@ -169,13 +153,4 @@ def inspect_complete_cache(cache_dir="./video_text_complete_cache"):
             print(f"  {pid}: text=None, video=None")
 
 
-if __name__ == "__main__":
-    # Cache the complete dataset (run this once)
-    print("🚀 Starting complete embeddings caching...")
-    complete_embeddings = cache_complete_embeddings()
-    
-    # Inspect the cache
-    inspect_complete_cache()
-    
-    print(f"\n✅ Complete embeddings setup complete!")
-    print(f"Use get_embeddings_for_split() to retrieve embeddings for any data split.") 
+

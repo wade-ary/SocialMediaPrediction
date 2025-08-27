@@ -9,19 +9,15 @@ from datasets import load_dataset
 from datasets import load_from_disk
 
 
-#data
+#dataset
 ds_train_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['train']
 ds_train_users = load_dataset("smpchallenge/SMP-Video", 'users')['train']
 ds_train_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['train']
 ds_train_labels = load_dataset("smpchallenge/SMP-Video", 'labels')['train']
 
-# Load test dataset
-ds_test_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['test']
-ds_test_users = load_dataset("smpchallenge/SMP-Video", 'users')['test']
-ds_test_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['test']
-# -----------------------
-# Model init
-# -----------------------
+
+
+# Model initialisation
 MODEL_NAME = "microsoft/xclip-base-patch32"
 processor = XCLIPProcessor.from_pretrained(MODEL_NAME)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -33,9 +29,7 @@ model.eval()
 
 
 
-# -----------------------
 # Text helpers
-# -----------------------
 def _as_list(obj):
     if obj is None:
         return []
@@ -67,9 +61,8 @@ def clean_and_join_text(post_content, post_suggested_words):
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-# -----------------------
+
 # Video frame sampling
-# -----------------------
 def sample_video_frames(video_path, num_frames=8, target_size=224):
     """
     Evenly sample num_frames across the video using PyAV.
@@ -110,9 +103,7 @@ def sample_video_frames(video_path, num_frames=8, target_size=224):
         frames.append(frames[-1])
     return frames
 
-# -----------------------
 # HF map function
-# -----------------------
 def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_size=224):
     """
     Adds columns to a NEW HF Dataset:
@@ -186,13 +177,13 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
                     txts_batch,
                     padding=True,
                     truncation=True,
-                    max_length=77,        # X-CLIP text max positions = 77
+                    max_length=77,        
                     return_tensors="pt",
                 )
 
-                # build video inputs (image processor only)
+                # build video inputs 
                 video_inputs = processor.image_processor(
-                    images=vids_batch,     # list/array of videos or frames in VideoMAE format
+                    images=vids_batch,     
                     return_tensors="pt",
                 )
 
@@ -217,7 +208,7 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
 
                 if vemb.ndim == 3:                   # (B, T, D)
                     vemb = vemb.mean(dim=1)          # -> (B, D)
-                if temb.ndim == 3:                   # (B, T, D) some HF versions broadcast text over frames
+                if temb.ndim == 3:                   # (B, T, D) 
                     temb = temb.mean(dim=1)          # -> (B, D)
 
                 # Sanity: now both must be (B, D)
@@ -257,7 +248,7 @@ def build_video_text_embeddings(posts_ds, *, batch_size=8, num_frames=8, target_
     video_text_features = video_text_features.select_columns(keep_cols)
     return video_text_features
 
-
+# Helper to use embeddings instead of recomputing
 def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache_train", **kwargs):
     """
     Load cached dataset if it exists; else compute with build_video_text_embeddings(),
@@ -272,11 +263,4 @@ def compute_or_load_embeddings(posts_ds, cache_dir="./video_text_cache_train", *
 
 
 
-
-embeddings_ds = compute_or_load_embeddings(3200, cache_dir="./video_text_cache_train")
-if len(embeddings_ds) < 3200:
-    print(f"Cache incomplete ({len(embeddings_ds)} vs {3200}), recomputing...")
-    embeddings_ds = build_video_text_embeddings(train_posts_for_emb, batch_size=8)
-
-print(len(embeddings_ds))
 

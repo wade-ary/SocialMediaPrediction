@@ -2,20 +2,13 @@ from datasets import load_dataset
 from collections import Counter
 import re
 import math
+import numpy as np
 
-# Load Train dataset
+# Load dataset
 ds_train_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['train']
 ds_train_users = load_dataset("smpchallenge/SMP-Video", 'users')['train']
 ds_train_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['train']
 ds_train_labels = load_dataset("smpchallenge/SMP-Video", 'labels')['train']
-
-# Load test dataset
-ds_test_posts = load_dataset("smpchallenge/SMP-Video", 'posts')['test']
-ds_test_users = load_dataset("smpchallenge/SMP-Video", 'users')['test']
-ds_test_videos = load_dataset("smpchallenge/SMP-Video", 'videos')['test']
-print("\nSample train user features:")
-print(ds_train_users[0]) 
-import numpy as np
 
 def build_user_features(users_ds):
     """
@@ -43,14 +36,14 @@ def build_user_features(users_ds):
         diggs     = np.maximum(np.asarray(batch["user_digg_count"],      dtype=np.float64), 0.0)
         hearts    = np.maximum(np.asarray(batch["user_heart_count"],     dtype=np.float64), 0.0)
 
-        # ---- Ratios (with +1 smoothing) ----
+        # Ratios (with +1 smoothing)
         follower_following_ratio = (followers + 1.0) / (following + 1.0)
         likes_per_video          = (likes     + 1.0) / (videos    + 1.0)
         hearts_per_video         = (hearts    + 1.0) / (videos    + 1.0)
         diggs_per_video          = (diggs     + 1.0) / (videos    + 1.0)
         likes_per_follower       = (likes     + 1.0) / (followers + 1.0)
 
-        # ---- Log1p of raw counts ----
+        # Log1p of raw counts
         log1p_following = np.log1p(following)
         log1p_followers = np.log1p(followers)
         log1p_likes     = np.log1p(likes)
@@ -58,7 +51,7 @@ def build_user_features(users_ds):
         log1p_diggs     = np.log1p(diggs)
         log1p_hearts    = np.log1p(hearts)
 
-        # ---- Log1p of ratios----
+        # Log1p of ratios
         log1p_follower_following_ratio = np.log1p(follower_following_ratio)
         log1p_likes_per_video          = np.log1p(likes_per_video)
         log1p_hearts_per_video         = np.log1p(hearts_per_video)
@@ -110,18 +103,6 @@ def build_user_features(users_ds):
     
     return users_features
 
-ds_train_users_features = build_user_features(ds_train_users)
-ds_test_users_features = build_user_features(ds_test_users)
-
-
-print("Train users shape:", ds_train_users.shape)
-print("Test  users shape:", ds_test_users_features.shape)
-
-print("\nSample train user features:")
-print(ds_train_users_features[0])  # first row
-
-print("\nNew columns added:")
-print([col for col in ds_train_users_features.column_names if "log1p" in col or "_per_" in col])
 
 def build_video_features(videos_ds, batch_size=1000, vertical_threshold=1.0):
     """
@@ -164,22 +145,6 @@ def build_video_features(videos_ds, batch_size=1000, vertical_threshold=1.0):
     return video_features
 
 
-
-ds_train_video_features = build_video_features(ds_train_videos)
-
-
-
-print("Train users shape:", ds_train_video_features.shape)
-
-
-print("\nSample train user features:")
-print(ds_train_video_features[0])  # first row
-
-print("\nNew columns added:")
-print([col for col in ds_train_video_features.column_names if "aspect_ratio" in col or "is_vertical" in col])
-
-
-
 def _slug(s: str) -> str:
     # Safe column name: lowercase, alnum+underscore only
     return re.sub(r'[^0-9a-zA-Z]+', '_', (s or 'unknown').strip().lower()).strip('_')
@@ -215,7 +180,7 @@ def build_post_features(posts_ds, *, batch_size=1000, min_count=1):
     if missing:
         raise ValueError(f"Missing required columns in posts_ds: {missing}")
 
-    # ----- Fixed vocab lists -----
+    # fixed location and lang list
     lang_vocab = ['en', 'un', 'es', 'id', 'pt']  # given categories
     loc_vocab  = ['US', 'GB', 'CA', 'PH', 'AU']  # given categories
 
@@ -308,20 +273,6 @@ def build_post_features(posts_ds, *, batch_size=1000, min_count=1):
     
     return posts_features
 
-    
-
-
-ds_train_post_features = build_post_features(ds_train_posts)
-print("Train users shape:", ds_train_post_features.shape)
-
-
-print("\nSample train user features:")
-print(ds_train_post_features[0])  # first row
-
-print("\nNew columns added:")
-print([col for col in ds_train_post_features.column_names])
-
-
 
 def build_target_features(labels_ds, clip_percentile=99.5):
     """
@@ -330,13 +281,6 @@ def build_target_features(labels_ds, clip_percentile=99.5):
     - Cap each score at that value
     - Apply log1p transformation: y = log1p(clipped_score)
     - Return the cap value for reuse on val/test
-    
-    Args:
-        labels_ds: HuggingFace dataset with target scores
-        clip_percentile: Percentile to use for clipping (default 99.5)
-    
-    Returns:
-        tuple: (processed_labels_ds, cap_value)
     """
     # Extract raw scores
     raw_scores = labels_ds["popularity"]
@@ -372,13 +316,6 @@ def build_target_features(labels_ds, clip_percentile=99.5):
     
     return processed_labels, cap_value
 
-# Process training labels
-ds_train_labels_processed, train_cap_value = build_target_features(ds_train_labels)
-
-print(f"\nTraining labels processed shape: {ds_train_labels_processed.shape}")
-print(f"Cap value for reuse: {train_cap_value:.4f}")
-print(f"Sample processed labels:")
-print(ds_train_labels_processed[0])
 
 
 
